@@ -36,8 +36,7 @@ steps:
         --platform managed \
         --port 8108 \
         --allow-unauthenticated \
-        --set-env-vars TYPESENSE_API_KEY=$_TYPESENSE_API_KEY \
-        --set-env-vars TYPESENSE_CORS_DOMAINS="https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000"
+        --set-env-vars "^||^TYPESENSE_API_KEY=$_TYPESENSE_API_KEY||TYPESENSE_CORS_DOMAINS=https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000"
 
 images:
   - 'gcr.io/blt-prod/blt-typesense:latest'
