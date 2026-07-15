@@ -1,0 +1,46 @@
+steps:
+  # Pull the latest image for layer caching
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - 'docker pull gcr.io/$PROJECT_ID/blt-typesense:latest || exit 0'
+
+  # Build the container image with cache from previous build
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-t'
+      - 'gcr.io/blt-prod/blt-typesense:latest'
+      - '--cache-from'
+      - 'gcr.io/blt-prod/blt-typesense:latest'
+      - '--build-arg'
+      - 'TYPESENSE_API_KEY=$_TYPESENSE_API_KEY'
+      - '--build-arg'
+      - 'TYPESENSE_CORS_DOMAINS=https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000'
+      - '.'
+
+  # Push the container images
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/blt-prod/blt-typesense:latest']
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        gcloud run deploy blt-typesense \
+        --image gcr.io/blt-prod/blt-typesense:latest \
+        --region europe-west2 \
+        --platform managed \
+        --port 8108 \
+        --allow-unauthenticated \
+        --set-env-vars TYPESENSE_API_KEY=$_TYPESENSE_API_KEY \
+        --set-env-vars TYPESENSE_CORS_DOMAINS="https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000"
+
+images:
+  - 'gcr.io/blt-prod/blt-typesense:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
