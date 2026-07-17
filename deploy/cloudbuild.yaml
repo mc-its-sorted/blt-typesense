@@ -33,10 +33,10 @@ steps:
         --port 8108 \
         --allow-unauthenticated \
         --execution-environment=gen2 \
+        --max-instances=1 \
+        --memory=1Gi \
         --set-secrets TYPESENSE_API_KEY=$_TYPESENSE_API_KEY_SECRET:latest \
-        --set-env-vars "^||^TYPESENSE_ENABLE_CORS=true||TYPESENSE_CORS_DOMAINS=https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000" \
-        --add-volume=name=typesense-vol,type=cloud-storage,bucket=blt-typesense-data \
-        --add-volume-mount=volume=typesense-vol,mount-path=/data
+        --set-env-vars "^||^TYPESENSE_ENABLE_CORS=true||TYPESENSE_CORS_DOMAINS=https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000"
 
 images:
   - 'gcr.io/blt-prod/blt-typesense:latest'
