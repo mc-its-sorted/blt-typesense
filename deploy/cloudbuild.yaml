@@ -20,16 +20,16 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/blt-typesense:latest']
 
-  # Deploy to Cloud Run WITHOUT GCS FUSE on /data.
-  # Typesense (RocksDB + Raft) needs a real local filesystem.
+  # Deploy to Cloud Run.
+  # Typesense uses local /data; GCS is backup-only via entrypoint rsync.
   # min-instances=1 + no-cpu-throttling keep Raft healthy when idle.
+  # max-instances=1: single-node only.
+  # Prerequisite: remove any GCS FUSE volume from the service once (see README).
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: bash
     args:
       - '-c'
       - |
-        set -euo pipefail
-
         gcloud run deploy blt-typesense \
           --project="$PROJECT_ID" \
           --image "gcr.io/$PROJECT_ID/blt-typesense:latest" \
@@ -49,19 +49,6 @@ steps:
           --set-secrets "TYPESENSE_API_KEY=$_TYPESENSE_API_KEY_SECRET:latest" \
           --set-env-vars "^||^TYPESENSE_ENABLE_CORS=true||TYPESENSE_CORS_DOMAINS=https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000||TYPESENSE_BACKUP_URI=gs://blt-typesense-data||TYPESENSE_DATA_DIR=/data||TYPESENSE_BACKUP_INTERVAL_SECONDS=300" \
           --ingress=internal-and-cloud-load-balancing
-
-        # Strip any GCS FUSE volume mounts left from earlier revisions.
-        if gcloud run services describe blt-typesense \
-            --project="$PROJECT_ID" \
-            --region=europe-west2 \
-            --format=export > /tmp/service.yaml; then
-          python3 deploy/strip_volumes.py /tmp/service.yaml
-          gcloud run services replace /tmp/service.yaml \
-            --project="$PROJECT_ID" \
-            --region=europe-west2
-        else
-          echo "WARNING: could not export service to strip volumes"
-        fi
 
 images:
   - 'gcr.io/$PROJECT_ID/blt-typesense:latest'

@@ -20,6 +20,26 @@ Single-node Typesense on Cloud Run for a small product search index.
 gcloud builds submit --config=deploy/cloudbuild.yaml --project=blt-prod
 ```
 
+### One-time: remove GCS FUSE volume (if still present)
+
+`gcloud run deploy` keeps existing volume mounts across updates. If `/data` is still
+backed by Cloud Storage FUSE, remove it once:
+
+```bash
+gcloud run services update blt-typesense \
+  --region=europe-west2 \
+  --project=blt-prod \
+  --remove-volume=typesense-vol
+```
+
+Confirm it is gone:
+
+```bash
+gcloud run services describe blt-typesense --region=europe-west2 --project=blt-prod \
+  --format='yaml(spec.template.spec.volumes,spec.template.spec.containers[0].volumeMounts)'
+# expect: null / empty
+```
+
 ## Health
 
 ```bash
