@@ -43,6 +43,79 @@ backup_loop() {
   done
 }
 
+wait_for_healthy() {
+  local deadline=$((SECONDS + 60))
+  while (( SECONDS < deadline )); do
+    if curl -sf "http://127.0.0.1:${API_PORT}/health" | grep -q '"ok":true'; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+ensure_search_api_key() {
+  if [[ -z "${TYPESENSE_SEARCH_API_KEY:-}" ]]; then
+    echo "TYPESENSE_SEARCH_API_KEY not set; skipping public search key bootstrap"
+    return 0
+  fi
+  if [[ -z "${TYPESENSE_API_KEY:-}" ]]; then
+    echo "WARNING: TYPESENSE_API_KEY missing; cannot bootstrap search key"
+    return 0
+  fi
+
+  echo "Waiting for Typesense health before search key bootstrap..."
+  if ! wait_for_healthy; then
+    echo "WARNING: Typesense not healthy within 60s; skipping search key bootstrap"
+    return 0
+  fi
+
+  local body http_code
+  body="$(
+    TYPESENSE_SEARCH_API_KEY="${TYPESENSE_SEARCH_API_KEY}" python3 - <<'PY'
+import json, os
+print(json.dumps({
+    "description": "public search key",
+    "actions": [
+        "documents:search",
+        "documents:get",
+        "collections:get",
+        "collections:list",
+        "aliases:get",
+        "aliases:list",
+    ],
+    "collections": ["*"],
+    "value": os.environ["TYPESENSE_SEARCH_API_KEY"],
+}))
+PY
+  )"
+
+  http_code="$(
+    curl -sS -o /tmp/ts-search-key-resp.json -w '%{http_code}' \
+      -X POST "http://127.0.0.1:${API_PORT}/keys" \
+      -H "X-TYPESENSE-API-KEY: ${TYPESENSE_API_KEY}" \
+      -H "Content-Type: application/json" \
+      -d "${body}" || true
+  )"
+
+  case "${http_code}" in
+    200|201)
+      echo "Public search API key ensured (HTTP ${http_code})"
+      ;;
+    409)
+      echo "Public search API key already present (HTTP 409)"
+      ;;
+    *)
+      echo "WARNING: search key bootstrap failed (HTTP ${http_code:-none}): $(cat /tmp/ts-search-key-resp.json 2>/dev/null || true)"
+      # Fixed value may already exist under another description; treat as OK if key works
+      if curl -sf "http://127.0.0.1:${API_PORT}/collections" \
+        -H "X-TYPESENSE-API-KEY: ${TYPESENSE_SEARCH_API_KEY}" >/dev/null 2>&1; then
+        echo "Public search API key already usable"
+      fi
+      ;;
+  esac
+}
+
 echo "Starting Typesense on port ${API_PORT}..."
 /opt/typesense-server \
   --data-dir="${DATA_DIR}" \
@@ -61,6 +134,7 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT
 
+ensure_search_api_key &
 backup_loop &
 wait "${TS_PID}"
 exit $?
