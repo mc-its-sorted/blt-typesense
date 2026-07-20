@@ -8,13 +8,18 @@ API_PORT="${TYPESENSE_API_PORT:-8108}"
 
 mkdir -p "${DATA_DIR}"
 
-echo "Restoring Typesense data from ${BACKUP_URI}/ -> ${DATA_DIR}/..."
-if gcloud storage ls "${BACKUP_URI}/" >/dev/null 2>&1; then
-  gcloud storage rsync -r "${BACKUP_URI}/" "${DATA_DIR}/" || {
-    echo "WARNING: restore from GCS failed; starting with whatever is local"
-  }
+echo "Restoring Typesense snapshot from ${BACKUP_URI}/typesense-backup.tar.gz -> ${DATA_DIR}/..."
+if gcloud storage ls "${BACKUP_URI}/typesense-backup.tar.gz" >/dev/null 2>&1; then
+  rm -rf /tmp/typesense-backup.tar.gz
+  gcloud storage cp "${BACKUP_URI}/typesense-backup.tar.gz" /tmp/typesense-backup.tar.gz || true
+  if [[ -f /tmp/typesense-backup.tar.gz ]]; then
+    tar -xzf /tmp/typesense-backup.tar.gz -C "${DATA_DIR}/" || {
+      echo "WARNING: Failed to extract snapshot tarball"
+    }
+    rm /tmp/typesense-backup.tar.gz
+  fi
 else
-  echo "No existing backup at ${BACKUP_URI}/ (or bucket not readable); starting empty"
+  echo "No existing snapshot at ${BACKUP_URI}/typesense-backup.tar.gz; starting empty"
 fi
 
 # Cloud Run gives each instance a new IP. Restored raft meta points at the old
@@ -22,7 +27,7 @@ fi
 # /health -> {"ok":false}. Raft state is rebuildable; documents live in db/meta.
 echo "Clearing raft state for single-node Cloud Run recovery..."
 rm -rf "${DATA_DIR}/state"
-# Drop FUSE/rsync temp leftovers that can break RocksDB open
+  # Drop FUSE/rsync temp leftovers that can break RocksDB open
 find "${DATA_DIR}" -name '*.gstmp' -delete 2>/dev/null || true
 find "${DATA_DIR}" -name '*_.gstmp' -delete 2>/dev/null || true
 
@@ -33,10 +38,27 @@ backup_loop() {
       break
     fi
     if curl -sf "http://127.0.0.1:${API_PORT}/health" | grep -q '"ok":true'; then
-      echo "Backup: ${DATA_DIR}/ -> ${BACKUP_URI}/..."
-      gcloud storage rsync -r -d "${DATA_DIR}/" "${BACKUP_URI}/" || {
-        echo "WARNING: backup to GCS failed"
-      }
+      echo "Taking Typesense snapshot and backing up to ${BACKUP_URI}/typesense-backup.tar.gz..."
+      rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
+      
+      # Trigger snapshot
+      if curl -sf -X POST "http://127.0.0.1:${API_PORT}/operations/snapshot?snapshot_path=/tmp/ts-snapshot" \
+        -H "X-TYPESENSE-API-KEY: ${TYPESENSE_API_KEY}" > /dev/null; then
+        
+        # Compress and upload
+        if tar -czf /tmp/typesense-backup.tar.gz -C /tmp/ts-snapshot .; then
+          gcloud storage cp /tmp/typesense-backup.tar.gz "${BACKUP_URI}/typesense-backup.tar.gz" || {
+            echo "WARNING: backup to GCS failed"
+          }
+        else
+          echo "WARNING: Failed to compress snapshot"
+        fi
+      else
+        echo "WARNING: Failed to trigger Typesense snapshot"
+      fi
+      
+      # Cleanup
+      rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
     else
       echo "Skipping backup: Typesense not healthy"
     fi
