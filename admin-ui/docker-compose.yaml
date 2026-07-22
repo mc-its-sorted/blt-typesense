@@ -1,0 +1,40 @@
+name: typesense
+
+networks:
+  typesense:
+    driver: bridge
+    external: false
+services:
+  typesense:
+    container_name: typesense
+    image: typesense/typesense:30.1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8108:8108"
+    volumes:
+      - ./data:/data
+    networks:
+      - typesense
+    command:
+      - "--data-dir=/data"
+      - "--api-key=HDKJHKJSHDKsdhjdsghh237656723zzzz!z"
+      - "--enable-cors"
+
+  dashboard:
+    container_name: typesense_dashboard
+    image: typesense-admin-dashboard:local
+    restart: unless-stopped
+    ports:
+      - 3009:3000
+    networks:
+      - typesense
+    environment:
+      - BETTER_AUTH_SECRET=HGHFGhfhgfhfCGHCG456465456!!jhghgf1
+      - BETTER_AUTH_URL=http://localhost:3009
+      - DISABLE_REGISTRATION=false
+    volumes:
+      - frontend-data:/app/data
+
+volumes:
+  frontend-data:
+

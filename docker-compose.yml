@@ -15,5 +15,19 @@ services:
       # Mount local gcloud credentials so the container can access the bucket (read-write for gcloud state)
       - ~/.config/gcloud:/root/.config/gcloud
 
+  admin-ui:
+    container_name: typesense_admin_ui
+    build: ./admin-ui
+    restart: unless-stopped
+    ports:
+      - "3009:3000"
+    environment:
+      - BETTER_AUTH_SECRET=HGHFGhfhgfhfCGHCG456465456!!jhghgf1
+      - BETTER_AUTH_URL=http://localhost:3009
+      - DISABLE_REGISTRATION=false
+    volumes:
+      - admin-ui-data:/app/data
+
 volumes:
   typesense-data:
+  admin-ui-data:
