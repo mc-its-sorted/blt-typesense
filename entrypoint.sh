@@ -16,7 +16,9 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 backup_has_db() {
   local archive="$1"
-  tar -tzf "${archive}" 2>/dev/null | grep -qE '(^|/)db(/|$)|(^|/)state(/|$)'
+  # Use grep without -q and redirect to /dev/null to consume all tar output
+  # and prevent SIGPIPE (exit code 141) from breaking 'set -o pipefail'.
+  tar -tzf "${archive}" 2>/dev/null | grep -E '(^|/)db(/|$)|(^|/)state(/|$)' >/dev/null
 }
 
 restore_from_gcs() {
@@ -113,7 +115,7 @@ backup_loop() {
     if ! kill -0 "${TS_PID}" 2>/dev/null; then
       break
     fi
-    if ! curl -sf "http://127.0.0.1:${API_PORT}/health" | grep -q '"ok":true'; then
+    if ! curl -sf "http://127.0.0.1:${API_PORT}/health" | grep '"ok":true' >/dev/null; then
       log "Skipping backup: Typesense not healthy"
       continue
     fi
@@ -169,7 +171,7 @@ backup_loop() {
 wait_for_healthy() {
   local deadline=$((SECONDS + 60))
   while (( SECONDS < deadline )); do
-    if curl -sf "http://127.0.0.1:${API_PORT}/health" | grep -q '"ok":true'; then
+    if curl -sf "http://127.0.0.1:${API_PORT}/health" | grep '"ok":true' >/dev/null; then
       return 0
     fi
     sleep 1
