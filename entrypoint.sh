@@ -16,7 +16,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 backup_has_db() {
   local archive="$1"
-  tar -tzf "${archive}" 2>/dev/null | grep -qE '(^|/)db(/|$)'
+  tar -tzf "${archive}" 2>/dev/null | grep -qE '(^|/)db(/|$)|(^|/)state(/|$)'
 }
 
 restore_from_gcs() {
@@ -56,9 +56,9 @@ restore_from_gcs() {
   rm -f "${tmp_tar}"
 
   # If archive nested one directory, flatten so db/meta sit at DATA_DIR root.
-  if [[ ! -d "${DATA_DIR}/db" ]]; then
+  if [[ ! -d "${DATA_DIR}/db" ]] && [[ ! -d "${DATA_DIR}/state" ]]; then
     local nested
-    nested="$(find "${DATA_DIR}" -mindepth 2 -maxdepth 2 -type d -name db 2>/dev/null | head -n 1 || true)"
+    nested="$(find "${DATA_DIR}" -mindepth 2 -maxdepth 2 -type d \( -name db -o -name state \) 2>/dev/null | head -n 1 || true)"
     if [[ -n "${nested}" ]]; then
       local parent
       parent="$(dirname "${nested}")"
@@ -70,8 +70,8 @@ restore_from_gcs() {
     fi
   fi
 
-  [[ -d "${DATA_DIR}/db" ]] \
-    || die "after extract, ${DATA_DIR}/db is missing — restore did not produce a usable data dir"
+  [[ -d "${DATA_DIR}/db" ]] || [[ -d "${DATA_DIR}/state" ]] \
+    || die "after extract, neither db/ nor state/ is present — restore did not produce a usable data dir"
 
   log "Restore OK. data-dir layout:"
   ls -la "${DATA_DIR}" || true
@@ -136,8 +136,8 @@ backup_loop() {
       continue
     fi
 
-    if [[ ! -d /tmp/ts-snapshot/db ]]; then
-      log "WARNING: snapshot missing /tmp/ts-snapshot/db; refusing upload"
+    if [[ ! -d /tmp/ts-snapshot/db ]] && [[ ! -d /tmp/ts-snapshot/state ]]; then
+      log "WARNING: snapshot missing /tmp/ts-snapshot/db and state; refusing upload"
       rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
       continue
     fi
