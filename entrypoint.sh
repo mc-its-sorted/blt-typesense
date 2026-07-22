@@ -3,33 +3,109 @@ set -euo pipefail
 
 DATA_DIR="${TYPESENSE_DATA_DIR:-/data}"
 BACKUP_URI="${TYPESENSE_BACKUP_URI:-gs://blt-typesense-data}"
+BACKUP_OBJECT="${BACKUP_URI%/}/typesense-backup.tar.gz"
 SYNC_INTERVAL="${TYPESENSE_BACKUP_INTERVAL_SECONDS:-300}"
 API_PORT="${TYPESENSE_API_PORT:-8108}"
+# Refuse to treat tiny/corrupt archives as valid restores or uploads.
+MIN_BACKUP_BYTES="${TYPESENSE_MIN_BACKUP_BYTES:-1024}"
 
 mkdir -p "${DATA_DIR}"
 
-echo "Restoring Typesense snapshot from ${BACKUP_URI}/typesense-backup.tar.gz -> ${DATA_DIR}/..."
-if gcloud storage ls "${BACKUP_URI}/typesense-backup.tar.gz" >/dev/null 2>&1; then
-  rm -rf /tmp/typesense-backup.tar.gz
-  gcloud storage cp "${BACKUP_URI}/typesense-backup.tar.gz" /tmp/typesense-backup.tar.gz || true
-  if [[ -f /tmp/typesense-backup.tar.gz ]]; then
-    tar -xzf /tmp/typesense-backup.tar.gz -C "${DATA_DIR}/" || {
-      echo "WARNING: Failed to extract snapshot tarball"
-    }
-    rm /tmp/typesense-backup.tar.gz
+log() { echo "$*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+backup_has_db() {
+  local archive="$1"
+  tar -tzf "${archive}" 2>/dev/null | grep -qE '(^|/)db(/|$)'
+}
+
+restore_from_gcs() {
+  log "Restoring Typesense snapshot from ${BACKUP_OBJECT} -> ${DATA_DIR}/..."
+
+  if ! gcloud storage ls "${BACKUP_OBJECT}" >/dev/null 2>&1; then
+    log "No existing snapshot at ${BACKUP_OBJECT}; starting empty"
+    return 0
   fi
-else
-  echo "No existing snapshot at ${BACKUP_URI}/typesense-backup.tar.gz; starting empty"
-fi
+
+  local tmp_tar="/tmp/typesense-backup.tar.gz"
+  rm -f "${tmp_tar}"
+
+  log "Downloading ${BACKUP_OBJECT}..."
+  gcloud storage cp "${BACKUP_OBJECT}" "file://${tmp_tar}" \
+    || die "failed to download ${BACKUP_OBJECT}"
+
+  [[ -f "${tmp_tar}" ]] || die "download reported success but ${tmp_tar} missing"
+
+  local size
+  size="$(stat -c%s "${tmp_tar}" 2>/dev/null || echo 0)"
+  log "Downloaded snapshot: ${size} bytes"
+  (( size >= MIN_BACKUP_BYTES )) \
+    || die "snapshot too small (${size} bytes; min ${MIN_BACKUP_BYTES}) — refusing empty start"
+
+  backup_has_db "${tmp_tar}" \
+    || die "snapshot tarball has no db/ entries — refusing empty start"
+
+  log "Snapshot contents (top-level):"
+  tar -tzf "${tmp_tar}" | awk -F/ 'NF<=2 {print}' | head -n 40 || true
+
+  # Official restore: wipe data dir, then extract snapshot as the new data-dir.
+  find "${DATA_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+  tar -xzf "${tmp_tar}" -C "${DATA_DIR}/" \
+    || die "failed to extract snapshot tarball into ${DATA_DIR}"
+  rm -f "${tmp_tar}"
+
+  # If archive nested one directory, flatten so db/meta sit at DATA_DIR root.
+  if [[ ! -d "${DATA_DIR}/db" ]]; then
+    local nested
+    nested="$(find "${DATA_DIR}" -mindepth 2 -maxdepth 2 -type d -name db 2>/dev/null | head -n 1 || true)"
+    if [[ -n "${nested}" ]]; then
+      local parent
+      parent="$(dirname "${nested}")"
+      log "Flattening nested snapshot layout from ${parent}..."
+      shopt -s dotglob nullglob
+      mv "${parent}"/* "${DATA_DIR}/"
+      shopt -u dotglob nullglob
+      rm -rf "${parent}"
+    fi
+  fi
+
+  [[ -d "${DATA_DIR}/db" ]] \
+    || die "after extract, ${DATA_DIR}/db is missing — restore did not produce a usable data dir"
+
+  log "Restore OK. data-dir layout:"
+  ls -la "${DATA_DIR}" || true
+  du -sh "${DATA_DIR}"/* 2>/dev/null || true
+}
+
+restore_from_gcs
 
 # Cloud Run gives each instance a new IP. Restored raft meta points at the old
 # peer address, which leaves a single-node cluster stuck in ERROR with
 # /health -> {"ok":false}. Raft state is rebuildable; documents live in db/meta.
-echo "Clearing raft state for single-node Cloud Run recovery..."
+log "Clearing raft state for single-node Cloud Run recovery..."
 rm -rf "${DATA_DIR}/state"
-  # Drop FUSE/rsync temp leftovers that can break RocksDB open
+# Drop FUSE/rsync temp leftovers that can break RocksDB open
 find "${DATA_DIR}" -name '*.gstmp' -delete 2>/dev/null || true
 find "${DATA_DIR}" -name '*_.gstmp' -delete 2>/dev/null || true
+
+collection_count() {
+  local body
+  body="$(curl -sf "http://127.0.0.1:${API_PORT}/collections" \
+    -H "X-TYPESENSE-API-KEY: ${TYPESENSE_API_KEY}" 2>/dev/null || true)"
+  if [[ -z "${body}" ]]; then
+    echo 0
+    return
+  fi
+  TYPESENSE_COLLECTIONS_JSON="${body}" python3 - <<'PY'
+import json, os
+try:
+    data = json.loads(os.environ["TYPESENSE_COLLECTIONS_JSON"])
+    print(len(data) if isinstance(data, list) else 0)
+except Exception:
+    print(0)
+PY
+}
 
 backup_loop() {
   while kill -0 "${TS_PID}" 2>/dev/null; do
@@ -37,31 +113,56 @@ backup_loop() {
     if ! kill -0 "${TS_PID}" 2>/dev/null; then
       break
     fi
-    if curl -sf "http://127.0.0.1:${API_PORT}/health" | grep -q '"ok":true'; then
-      echo "Taking Typesense snapshot and backing up to ${BACKUP_URI}/typesense-backup.tar.gz..."
-      rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
-      
-      # Trigger snapshot
-      if curl -sf -X POST "http://127.0.0.1:${API_PORT}/operations/snapshot?snapshot_path=/tmp/ts-snapshot" \
-        -H "X-TYPESENSE-API-KEY: ${TYPESENSE_API_KEY}" > /dev/null; then
-        
-        # Compress and upload
-        if tar -czf /tmp/typesense-backup.tar.gz -C /tmp/ts-snapshot .; then
-          gcloud storage cp /tmp/typesense-backup.tar.gz "${BACKUP_URI}/typesense-backup.tar.gz" || {
-            echo "WARNING: backup to GCS failed"
-          }
-        else
-          echo "WARNING: Failed to compress snapshot"
-        fi
-      else
-        echo "WARNING: Failed to trigger Typesense snapshot"
-      fi
-      
-      # Cleanup
-      rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
-    else
-      echo "Skipping backup: Typesense not healthy"
+    if ! curl -sf "http://127.0.0.1:${API_PORT}/health" | grep -q '"ok":true'; then
+      log "Skipping backup: Typesense not healthy"
+      continue
     fi
+
+    local colls
+    colls="$(collection_count)"
+    if (( colls < 1 )); then
+      log "Skipping backup: 0 collections (refusing to overwrite GCS with empty index)"
+      continue
+    fi
+
+    log "Taking Typesense snapshot and backing up to ${BACKUP_OBJECT} (${colls} collections)..."
+    rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
+
+    if ! curl -sf -X POST \
+      "http://127.0.0.1:${API_PORT}/operations/snapshot?snapshot_path=/tmp/ts-snapshot" \
+      -H "X-TYPESENSE-API-KEY: ${TYPESENSE_API_KEY}" > /dev/null; then
+      log "WARNING: Failed to trigger Typesense snapshot"
+      rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
+      continue
+    fi
+
+    if [[ ! -d /tmp/ts-snapshot/db ]]; then
+      log "WARNING: snapshot missing /tmp/ts-snapshot/db; refusing upload"
+      rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
+      continue
+    fi
+
+    if ! tar -czf /tmp/typesense-backup.tar.gz -C /tmp/ts-snapshot .; then
+      log "WARNING: Failed to compress snapshot"
+      rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
+      continue
+    fi
+
+    local size
+    size="$(stat -c%s /tmp/typesense-backup.tar.gz 2>/dev/null || echo 0)"
+    if (( size < MIN_BACKUP_BYTES )) || ! backup_has_db /tmp/typesense-backup.tar.gz; then
+      log "WARNING: local snapshot invalid (size=${size}); refusing upload"
+      rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
+      continue
+    fi
+
+    if gcloud storage cp /tmp/typesense-backup.tar.gz "${BACKUP_OBJECT}"; then
+      log "Backup uploaded (${size} bytes) -> ${BACKUP_OBJECT}"
+    else
+      log "WARNING: backup to GCS failed"
+    fi
+
+    rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
   done
 }
 
@@ -78,17 +179,17 @@ wait_for_healthy() {
 
 ensure_search_api_key() {
   if [[ -z "${TYPESENSE_SEARCH_API_KEY:-}" ]]; then
-    echo "TYPESENSE_SEARCH_API_KEY not set; skipping public search key bootstrap"
+    log "TYPESENSE_SEARCH_API_KEY not set; skipping public search key bootstrap"
     return 0
   fi
   if [[ -z "${TYPESENSE_API_KEY:-}" ]]; then
-    echo "WARNING: TYPESENSE_API_KEY missing; cannot bootstrap search key"
+    log "WARNING: TYPESENSE_API_KEY missing; cannot bootstrap search key"
     return 0
   fi
 
-  echo "Waiting for Typesense health before search key bootstrap..."
+  log "Waiting for Typesense health before search key bootstrap..."
   if ! wait_for_healthy; then
-    echo "WARNING: Typesense not healthy within 60s; skipping search key bootstrap"
+    log "WARNING: Typesense not healthy within 60s; skipping search key bootstrap"
     return 0
   fi
 
@@ -122,23 +223,22 @@ PY
 
   case "${http_code}" in
     200|201)
-      echo "Public search API key ensured (HTTP ${http_code})"
+      log "Public search API key ensured (HTTP ${http_code})"
       ;;
     409)
-      echo "Public search API key already present (HTTP 409)"
+      log "Public search API key already present (HTTP 409)"
       ;;
     *)
-      echo "WARNING: search key bootstrap failed (HTTP ${http_code:-none}): $(cat /tmp/ts-search-key-resp.json 2>/dev/null || true)"
-      # Fixed value may already exist under another description; treat as OK if key works
+      log "WARNING: search key bootstrap failed (HTTP ${http_code:-none}): $(cat /tmp/ts-search-key-resp.json 2>/dev/null || true)"
       if curl -sf "http://127.0.0.1:${API_PORT}/collections" \
         -H "X-TYPESENSE-API-KEY: ${TYPESENSE_SEARCH_API_KEY}" >/dev/null 2>&1; then
-        echo "Public search API key already usable"
+        log "Public search API key already usable"
       fi
       ;;
   esac
 }
 
-echo "Starting Typesense on port ${API_PORT}..."
+log "Starting Typesense on port ${API_PORT}..."
 /opt/typesense-server \
   --data-dir="${DATA_DIR}" \
   --api-address=0.0.0.0 \
@@ -150,7 +250,7 @@ echo "Starting Typesense on port ${API_PORT}..."
 TS_PID=$!
 
 cleanup() {
-  echo "Shutting down Typesense (pid ${TS_PID})..."
+  log "Shutting down Typesense (pid ${TS_PID})..."
   kill -TERM "${TS_PID}" 2>/dev/null || true
   wait "${TS_PID}" 2>/dev/null || true
 }

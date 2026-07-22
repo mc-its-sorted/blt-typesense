@@ -6,10 +6,10 @@ Single-node Typesense on Cloud Run for a small product search index.
 
 | Piece | Choice | Why |
 | --- | --- | --- |
-| Runtime | Cloud Run gen2, `min-instances=1`, `max-instances=1` | Always one process; never multi-node Raft |
+| Runtime | Cloud Run gen1, 512Mi, `min-instances=1`, `max-instances=1` | Small index; always one process; never multi-node Raft |
 | CPU | `--no-cpu-throttling` | Raft heartbeats need CPU between requests |
 | Data dir | Local container disk `/data` | RocksDB + Raft need POSIX local FS |
-| Persistence | GCS bucket `gs://blt-typesense-data` via rsync | Backup/restore only — **not** a live mount |
+| Persistence | GCS `typesense-backup.tar.gz` (snapshot API) | Backup/restore only — **not** a live mount |
 | Public URL | `https://ts.bltdirect.com` via existing HTTPS LB | Ingress restricted to LB |
 
 **Do not mount the GCS bucket with Cloud Storage FUSE at `/data`.** FUSE is not a real filesystem (no proper locking/mmap). Typesense will eventually enter Raft `ERROR` and `/health` returns `{"ok":false}`.
@@ -58,17 +58,20 @@ node ... is in state ERROR, can't reset_peer
 
 Cause is almost always stale Raft meta after a restart (new Cloud Run IP) or corrupted state from FUSE.
 
-1. Redeploy this image (entrypoint clears `state/` on every boot and restores `db/` + `meta/` from GCS).
-2. If still unhealthy, wipe the bad raft/state objects in the backup bucket, then redeploy:
+1. Redeploy this image (entrypoint restores `gs://…/typesense-backup.tar.gz` into `/data`, then clears `state/` so Raft can re-form).
+2. Confirm restore in Cloud Run logs — expect `Restore OK` and a non-zero download size. Failures now abort startup (`ERROR: …`) instead of starting empty.
+3. Inspect the backup object if restore fails:
 
 ```bash
-gcloud storage rm -r gs://blt-typesense-data/state/**
-# optional nuclear option if collections are empty/corrupt:
-# gcloud storage rm -r gs://blt-typesense-data/**
-gcloud builds submit --config=deploy/cloudbuild.yaml --project=blt-prod
+gcloud storage ls -l gs://blt-typesense-data/typesense-backup.tar.gz
+# download and list: should contain db/ (and usually meta/)
+gcloud storage cp gs://blt-typesense-data/typesense-backup.tar.gz /tmp/ts-bak.tar.gz
+tar -tzf /tmp/ts-bak.tar.gz | head
 ```
 
-3. Re-index from the app/source of truth if the document store was wiped.
+4. Re-index from the app/source of truth only if the GCS snapshot is missing/corrupt. Empty nodes **will not** overwrite a good GCS backup (backup skips when collection count is 0).
+
+**Backup safety:** periodic uploads require `/health` ok, ≥1 collection, and a tarball that contains `db/`. That stops a failed restore from wiping the only durable copy.
 
 ## Env / secrets
 

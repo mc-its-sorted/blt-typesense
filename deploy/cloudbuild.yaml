@@ -21,9 +21,9 @@ steps:
     args: ['push', 'gcr.io/$PROJECT_ID/blt-typesense:latest']
 
   # Deploy to Cloud Run.
-  # Typesense uses local /data; GCS is backup-only via entrypoint rsync.
-  # min-instances=1 + no-cpu-throttling keep Raft healthy when idle.
-  # max-instances=1: single-node only.
+  # Typesense uses local /data; GCS is backup-only via entrypoint snapshot tar.
+  # gen1 + 512Mi is enough for a small index; min-instances=1 + no-cpu-throttling
+  # keep Raft healthy when idle. max-instances=1: single-node only.
   # Prerequisite: remove any GCS FUSE volume from the service once (see README).
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: bash
@@ -37,10 +37,9 @@ steps:
           --platform managed \
           --port 8108 \
           --allow-unauthenticated \
-          --execution-environment=gen2 \
+          --execution-environment=gen1 \
           --cpu=1 \
-          --memory=2Gi \
-          --cpu-boost \
+          --memory=512Mi \
           --no-cpu-throttling \
           --min-instances=1 \
           --max-instances=1 \
