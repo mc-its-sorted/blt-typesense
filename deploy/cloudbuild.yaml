@@ -46,7 +46,7 @@ steps:
           --concurrency=80 \
           --timeout=300 \
           --set-secrets "TYPESENSE_API_KEY=$_TYPESENSE_API_KEY_SECRET:latest,TYPESENSE_SEARCH_API_KEY=$_TYPESENSE_SEARCH_API_KEY_SECRET:latest" \
-          --set-env-vars "^||^TYPESENSE_ENABLE_CORS=true||TYPESENSE_CORS_DOMAINS=https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000||TYPESENSE_BACKUP_URI=gs://blt-typesense-data||TYPESENSE_DATA_DIR=/data||TYPESENSE_BACKUP_INTERVAL_SECONDS=300" \
+          --set-env-vars "^@^TYPESENSE_ENABLE_CORS=true@TYPESENSE_CORS_DOMAINS=https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000@TYPESENSE_BACKUP_URI=gs://blt-typesense-data@TYPESENSE_DATA_DIR=/data@TYPESENSE_BACKUP_INTERVAL_SECONDS=300" \
           --ingress=internal-and-cloud-load-balancing
 
 images:
