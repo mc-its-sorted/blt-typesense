@@ -1,0 +1,19 @@
+services:
+  typesense:
+    build: .
+    container_name: typesense
+    ports:
+      - "8108:8108"
+    env_file:
+      - .env
+    environment:
+      # Use the new environment variable for testing persistence with a separate file
+      - BACKUP_FILE=test-typesense-backup.tar.gz
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+    volumes:
+      - typesense-data:/data
+      # Mount local gcloud credentials so the container can access the bucket (read-write for gcloud state)
+      - ~/.config/gcloud:/root/.config/gcloud
+
+volumes:
+  typesense-data:

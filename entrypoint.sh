@@ -3,7 +3,8 @@ set -euo pipefail
 
 DATA_DIR="${TYPESENSE_DATA_DIR:-/data}"
 BACKUP_URI="${TYPESENSE_BACKUP_URI:-gs://blt-typesense-data}"
-BACKUP_OBJECT="${BACKUP_URI%/}/typesense-backup.tar.gz"
+BACKUP_FILE="${BACKUP_FILE:-typesense-backup.tar.gz}"
+BACKUP_OBJECT="${BACKUP_URI%/}/${BACKUP_FILE}"
 SYNC_INTERVAL="${TYPESENSE_BACKUP_INTERVAL_SECONDS:-300}"
 API_PORT="${TYPESENSE_API_PORT:-8108}"
 # Refuse to treat tiny/corrupt archives as valid restores or uploads.
@@ -23,8 +24,7 @@ backup_has_db() {
 
 restore_from_gcs() {
   log "Restoring Typesense snapshot from ${BACKUP_OBJECT} -> ${DATA_DIR}/..."
-
-  if ! gcloud storage ls "${BACKUP_OBJECT}" >/dev/null 2>&1; then
+  if ! gcloud storage ls "${BACKUP_OBJECT}"; then
     log "No existing snapshot at ${BACKUP_OBJECT}; starting empty"
     return 0
   fi
@@ -82,11 +82,14 @@ restore_from_gcs() {
 
 restore_from_gcs
 
+# If we restored a raft snapshot (Typesense 0.25+) but not a db dir, the real
+# database is inside state/snapshot/. We don't move it, but we make sure we
+# do NOT delete state/ so Raft can load it!
+# 
 # Cloud Run gives each instance a new IP. Restored raft meta points at the old
-# peer address, which leaves a single-node cluster stuck in ERROR with
-# /health -> {"ok":false}. Raft state is rebuildable; documents live in db/meta.
-log "Clearing raft state for single-node Cloud Run recovery..."
-rm -rf "${DATA_DIR}/state"
+# peer address. Typesense flag --reset-peers-on-error=true should handle this.
+# log "Clearing raft state for single-node Cloud Run recovery..."
+# rm -rf "${DATA_DIR}/state"
 # Drop FUSE/rsync temp leftovers that can break RocksDB open
 find "${DATA_DIR}" -name '*.gstmp' -delete 2>/dev/null || true
 find "${DATA_DIR}" -name '*_.gstmp' -delete 2>/dev/null || true

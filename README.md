@@ -144,4 +144,11 @@ curl -sS "https://ts.bltdirect.com/collections" \
 
 ```bash
 ./check_port.sh
+
+
+source .env
+curl -s http://localhost:8108/collections/products/documents/search \
+  -H "X-TYPESENSE-API-KEY: ${TYPESENSE_API_KEY}" \
+  -G --data-urlencode 'q=*' \
+  --data-urlencode 'per_page=1' | jq
 ```
