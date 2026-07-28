@@ -6,7 +6,7 @@ Single-node Typesense on Cloud Run for a small product search index.
 
 | Piece | Choice | Why |
 | --- | --- | --- |
-| Runtime | Cloud Run gen1, 512Mi, `min-instances=1`, `max-instances=1` | Small index; always one process; never multi-node Raft |
+| Runtime | Cloud Run gen1, 1Gi, `min-instances=1`, `max-instances=1` | Small index; always one process; never multi-node Raft |
 | CPU | `--no-cpu-throttling` | Raft heartbeats need CPU between requests |
 | Data dir | Local container disk `/data` | RocksDB + Raft need POSIX local FS |
 | Persistence | GCS `typesense-backup.tar.gz` (snapshot API) | Backup/restore only — **not** a live mount |
