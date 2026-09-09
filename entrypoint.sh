@@ -5,7 +5,7 @@ DATA_DIR="${TYPESENSE_DATA_DIR:-/data}"
 BACKUP_URI="${TYPESENSE_BACKUP_URI:-gs://blt-typesense-data}"
 BACKUP_FILE="${BACKUP_FILE:-typesense-backup.tar.gz}"
 BACKUP_OBJECT="${BACKUP_URI%/}/${BACKUP_FILE}"
-SYNC_INTERVAL="${TYPESENSE_BACKUP_INTERVAL_SECONDS:-300}"
+SYNC_INTERVAL="${TYPESENSE_BACKUP_INTERVAL_SECONDS:-43200}"
 API_PORT="${TYPESENSE_API_PORT:-8108}"
 # Refuse to treat tiny/corrupt archives as valid restores or uploads.
 MIN_BACKUP_BYTES="${TYPESENSE_MIN_BACKUP_BYTES:-1024}"
@@ -147,7 +147,7 @@ backup_loop() {
       continue
     fi
 
-    if ! tar -czf /tmp/typesense-backup.tar.gz -C /tmp/ts-snapshot .; then
+    if ! GZIP=-1 tar -czf /tmp/typesense-backup.tar.gz -C /tmp/ts-snapshot .; then
       log "WARNING: Failed to compress snapshot"
       rm -rf /tmp/ts-snapshot /tmp/typesense-backup.tar.gz
       continue

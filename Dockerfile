@@ -2,7 +2,7 @@ FROM typesense/typesense:30.2
 
 ENV TYPESENSE_DATA_DIR=/data
 ENV TYPESENSE_BACKUP_URI=gs://blt-typesense-data
-ENV TYPESENSE_BACKUP_INTERVAL_SECONDS=300
+ENV TYPESENSE_BACKUP_INTERVAL_SECONDS=43200
 ENV TYPESENSE_API_PORT=8108
 
 # curl for health checks; gcloud for backup/restore to GCS
