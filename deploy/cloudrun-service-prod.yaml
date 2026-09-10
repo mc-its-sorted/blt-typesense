@@ -1,0 +1,51 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: blt-typesense
+  annotations:
+    run.googleapis.com/launch-stage: GA
+    run.googleapis.com/ingress: internal-and-cloud-load-balancing
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '1'
+        autoscaling.knative.dev/minScale: '1'
+        run.googleapis.com/cpu-throttling: 'false'
+        run.googleapis.com/execution-environment: gen1
+        run.googleapis.com/startup-cpu-boost: 'true'
+      labels:
+        run.googleapis.com/startupProbeType: Custom
+    spec:
+      containerConcurrency: 80
+      serviceAccountName: 419536040232-compute@developer.gserviceaccount.com
+      timeoutSeconds: 300
+      volumes:
+        - name: env-secret
+          secret:
+            secretName: blt-typesense-prod-env
+            items:
+              - key: latest
+                path: .env
+      containers:
+        - image: IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 8108
+              name: http1
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          startupProbe:
+            tcpSocket:
+              port: 8108
+            initialDelaySeconds: 0
+            periodSeconds: 240
+            timeoutSeconds: 240
+            failureThreshold: 1
+          volumeMounts:
+            - name: env-secret
+              mountPath: /secrets
+  traffic:
+    - percent: 100
+      latestRevision: true

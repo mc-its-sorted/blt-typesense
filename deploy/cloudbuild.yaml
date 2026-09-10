@@ -11,50 +11,35 @@ steps:
     args:
       - 'build'
       - '-t'
+      - 'gcr.io/$PROJECT_ID/blt-typesense:$COMMIT_SHA'
+      - '-t'
       - 'gcr.io/$PROJECT_ID/blt-typesense:latest'
       - '--cache-from'
       - 'gcr.io/$PROJECT_ID/blt-typesense:latest'
       - '.'
 
-  # Push the container image
+  # Push the container images
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/blt-typesense:$COMMIT_SHA']
+
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/blt-typesense:latest']
 
-  # Deploy to Cloud Run.
-  # Typesense uses local /data; GCS is backup-only via entrypoint snapshot tar.
-  # gen1 + 1Gi is enough for a small index; min-instances=1 + no-cpu-throttling
-  # keep Raft healthy when idle. max-instances=1: single-node only.
-  # Prerequisite: remove any GCS FUSE volume from the service once (see README).
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: bash
+  # Deploy to Cloud Run using declarative spec (matches blt-api-prod pattern)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'bash'
     args:
       - '-c'
       - |
-        gcloud run deploy blt-typesense \
-          --project="$PROJECT_ID" \
-          --image "gcr.io/$PROJECT_ID/blt-typesense:latest" \
-          --region europe-west2 \
-          --platform managed \
-          --port 8108 \
-          --allow-unauthenticated \
-          --execution-environment=gen1 \
-          --cpu=1 \
-          --memory=1Gi \
-          --no-cpu-throttling \
-          --min-instances=1 \
-          --max-instances=1 \
-          --concurrency=80 \
-          --timeout=300 \
-          --set-secrets "TYPESENSE_API_KEY=$_TYPESENSE_API_KEY_SECRET:latest,TYPESENSE_SEARCH_API_KEY=$_TYPESENSE_SEARCH_API_KEY_SECRET:latest" \
-          --set-env-vars "^@^TYPESENSE_ENABLE_CORS=true@TYPESENSE_CORS_DOMAINS=https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000@TYPESENSE_BACKUP_URI=gs://blt-typesense-data@TYPESENSE_DATA_DIR=/data@TYPESENSE_BACKUP_INTERVAL_SECONDS=43200" \
-          --ingress=internal-and-cloud-load-balancing
+        sed -i 's|IMAGE_PLACEHOLDER|gcr.io/'"$PROJECT_ID"'/blt-typesense:'"$COMMIT_SHA"'|g' deploy/cloudrun-service-prod.yaml
+        gcloud run services replace deploy/cloudrun-service-prod.yaml --region=europe-west2
 
 images:
+  - 'gcr.io/$PROJECT_ID/blt-typesense:$COMMIT_SHA'
   - 'gcr.io/$PROJECT_ID/blt-typesense:latest'
 
 substitutions:
-  _TYPESENSE_API_KEY_SECRET: blt-typesense-api-key
-  _TYPESENSE_SEARCH_API_KEY_SECRET: blt-typesense-search-api-key
+  COMMIT_SHA: 'latest'
 
 options:
   logging: CLOUD_LOGGING_ONLY

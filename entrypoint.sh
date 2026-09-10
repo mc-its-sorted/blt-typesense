@@ -1,6 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 
+log() { echo "$*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+# Load mounted secret / environment file if present
+if [ -f "/secrets/.env" ]; then
+  log "Mounted environment configuration detected at /secrets/.env"
+  if [ ! -f ".env" ]; then
+    ln -sf /secrets/.env .env 2>/dev/null || true
+  fi
+  set -a
+  # shellcheck source=/dev/null
+  . /secrets/.env
+  set +a
+elif [ -f ".env" ]; then
+  log "Local environment configuration detected at .env"
+  set -a
+  # shellcheck source=/dev/null
+  . .env
+  set +a
+fi
+
 DATA_DIR="${TYPESENSE_DATA_DIR:-/data}"
 BACKUP_URI="${TYPESENSE_BACKUP_URI:-gs://blt-typesense-data}"
 BACKUP_FILE="${BACKUP_FILE:-typesense-backup.tar.gz}"
@@ -11,9 +32,6 @@ API_PORT="${TYPESENSE_API_PORT:-8108}"
 MIN_BACKUP_BYTES="${TYPESENSE_MIN_BACKUP_BYTES:-1024}"
 
 mkdir -p "${DATA_DIR}"
-
-log() { echo "$*"; }
-die() { echo "ERROR: $*" >&2; exit 1; }
 
 backup_has_db() {
   local archive="$1"
@@ -249,8 +267,8 @@ log "Starting Typesense on port ${API_PORT}..."
   --api-address=0.0.0.0 \
   --api-port="${API_PORT}" \
   --api-key="${TYPESENSE_API_KEY}" \
-  --enable-cors=true \
-  --cors-domains="${TYPESENSE_CORS_DOMAINS}" \
+  --enable-cors="${TYPESENSE_ENABLE_CORS:-true}" \
+  --cors-domains="${TYPESENSE_CORS_DOMAINS:-*}" \
   --reset-peers-on-error=true &
 TS_PID=$!
 

@@ -75,12 +75,30 @@ tar -tzf /tmp/ts-bak.tar.gz | head
 
 ## Env / secrets
 
-| Name | Source |
+All production environment configuration and secrets are unified into a single Secret Manager secret: `blt-typesense-prod-env`, following the same architecture pattern as `blt-api`.
+
+In Cloud Run, `deploy/cloudrun-service-prod.yaml` mounts `blt-typesense-prod-env` as a file volume at `/secrets/.env`. On container startup, `entrypoint.sh` detects `/secrets/.env` and automatically exports all configuration variables into the environment.
+
+### Updating Production Secrets:
+When environment variables or keys need changing:
+```bash
+gcloud secrets versions add blt-typesense-prod-env \
+  --project=blt-prod \
+  --data-file=.env.prod
+```
+
+### Key Environment Variables
+
+| Name | Description |
 | --- | --- |
-| `TYPESENSE_API_KEY` | Secret Manager `blt-typesense-api-key` (admin bootstrap; do not expose to browsers) |
-| `TYPESENSE_SEARCH_API_KEY` | Secret Manager `blt-typesense-search-api-key` (public search key; safe for frontend) |
-| `TYPESENSE_CORS_DOMAINS` | Cloud Run env |
-| `TYPESENSE_BACKUP_URI` | default `gs://blt-typesense-data` |
+| `TYPESENSE_API_KEY` | Admin API key for Typesense (bootstrap & admin operations) |
+| `TYPESENSE_SEARCH_API_KEY` | Public search API key (safe for frontend queries) |
+| `TYPESENSE_ENABLE_CORS` | Enables CORS support (`true`) |
+| `TYPESENSE_CORS_DOMAINS` | Allowed CORS origins (e.g. `https://blt3.bltdirect.com,https://www.bltdirect.com,http://localhost:3000`) |
+| `TYPESENSE_BACKUP_URI` | GCS backup bucket (`gs://blt-typesense-data`) |
+| `TYPESENSE_DATA_DIR` | Local disk data directory (`/data`) |
+| `TYPESENSE_BACKUP_INTERVAL_SECONDS` | Backup snapshot interval in seconds (default `43200`) |
+| `BACKUP_FILE` | Snapshot backup tarball filename (default `typesense-backup.tar.gz`) |
 
 ### Public search API key
 
